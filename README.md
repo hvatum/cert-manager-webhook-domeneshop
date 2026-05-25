@@ -78,6 +78,30 @@ kubectl create secret generic domeneshop-credentials \
 
 **NOTE:** If your cluster is RBAC-enabled and you want to use a `ClusterIssuer` instead, you may have to uncomment the bottom two resources in `deploy/domeneshop-webhook/templates/rbac.yaml` before installing the Helm chart, in order for the webhook to read the credentials secrets in the `cert-manager` namespace.
 
+### Scoped credentials (`domainID`)
+
+By default the webhook calls `GET /v0/domains` to resolve the domain name to its numeric ID before publishing the TXT record. API credentials that are scoped to a single domain (and therefore unauthorised to list the account's domains) will receive `403 Forbidden` on that lookup and issuance will fail with `API returned 403 Forbidden: {"code":"resource:unauthorized"...}`.
+
+To skip the lookup, set the optional `domainID` field on the solver config to the numeric ID of the target domain (visible in the URL when browsing the domain in the Domeneshop admin panel, or via `GET /v0/domains` from an unrestricted account):
+
+```yaml
+solvers:
+- dns01:
+    webhook:
+      groupName: api.domeneshop.no
+      solverName: domeneshop
+      config:
+        domainID: 1172074
+        APITokenSecretRef:
+          key: APIToken
+          name: domeneshop-credentials
+        APISecretSecretRef:
+          key: APISecret
+          name: domeneshop-credentials
+```
+
+When `domainID` is set, the credentials only need read/create/delete permission on `/v0/domains/{id}/dns(/{recordId})` for that single domain — `/v0/domains` is not called. When `domainID` is omitted (or `0`), behaviour is unchanged.
+
 ## Issue a certificate
 
 You should now be ready to issue certificate using DNS01 challenges through the Domeneshop API!

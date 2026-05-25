@@ -71,7 +71,7 @@ type domeneshopDNSProviderSolver struct {
 // be used by your provider here, you should reference a Kubernetes Secret
 // resource and fetch these credentials using a Kubernetes clientset.
 type domeneshopDNSProviderConfig struct {
-	// Change the two fields below according to the format of the configuration
+	// Change the fields below according to the format of the configuration
 	// to be decoded.
 	// These fields will be set by users in the
 	// `issuer.spec.acme.dns01.providers.webhook.config` field.
@@ -79,6 +79,13 @@ type domeneshopDNSProviderConfig struct {
 	//Email           string `json:"email"`
 	APITokenSecretRef  corev1.SecretKeySelector `json:"apiTokenSecretRef"`
 	APISecretSecretRef corev1.SecretKeySelector `json:"apiSecretSecretRef"`
+
+	// DomainID, if set (>0), resolves the zone via GET /v0/domains/{id}
+	// instead of the GET /v0/domains list call. Intended for API
+	// credentials that are scoped to a single domain and therefore not
+	// authorised to list the account's domains. When unset, the domain is
+	// resolved by name via the domains list.
+	DomainID int `json:"domainID,omitempty"`
 }
 
 // Name is used as the name for this DNS solver when referencing it on the ACME
@@ -91,12 +98,7 @@ func (c *domeneshopDNSProviderSolver) Name() string {
 	return "domeneshop"
 }
 
-func (c *domeneshopDNSProviderSolver) getClient(ch *v1alpha1.ChallengeRequest) (*domeneshop.Client, error) {
-	cfg, err := loadConfig(ch.Config)
-	if err != nil {
-		return nil, err
-	}
-
+func (c *domeneshopDNSProviderSolver) getClient(ch *v1alpha1.ChallengeRequest, cfg domeneshopDNSProviderConfig) (*domeneshop.Client, error) {
 	apiToken, err := getSecretValue(c.client, ch.ResourceNamespace, cfg.APITokenSecretRef.Name, cfg.APITokenSecretRef.Key)
 	if err != nil {
 		return nil, err
@@ -108,6 +110,25 @@ func (c *domeneshopDNSProviderSolver) getClient(ch *v1alpha1.ChallengeRequest) (
 
 	client := domeneshop.NewClient(apiToken, apiSecret)
 	return client, nil
+}
+
+// resolveDomain returns the Domeneshop Domain for the given zone. If
+// domainID is set (>0), it fetches this domain directly without listing
+// the account's domains. Otherwise it looks up the domain by name.
+func resolveDomain(client *domeneshop.Client, domainID int, zone string) (*domeneshop.Domain, error) {
+	if domainID > 0 {
+		domain, err := client.GetDomainByID(domainID)
+		if err != nil {
+			return nil, err
+		}
+		// Guard against a misconfigured domainID that points to a different
+		// zone than the one cert-manager asked us to publish into.
+		if !strings.EqualFold(domain.Name, zone) {
+			return nil, fmt.Errorf("configured domainID %d resolved to domain %q, expected %q", domainID, domain.Name, zone)
+		}
+		return domain, nil
+	}
+	return client.GetDomainByName(zone)
 }
 
 func getSecretValue(client *kubernetes.Clientset, namespace string, secretName string, secretKey string) (string, error) {
@@ -130,12 +151,17 @@ func getSecretValue(client *kubernetes.Clientset, namespace string, secretName s
 // solver has correctly configured the DNS provider.
 func (c *domeneshopDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 
-	client, err := c.getClient(ch)
+	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
 
-	domain, err := client.GetDomainByName(util.UnFqdn(ch.ResolvedZone))
+	client, err := c.getClient(ch, cfg)
+	if err != nil {
+		return err
+	}
+
+	domain, err := resolveDomain(client, cfg.DomainID, util.UnFqdn(ch.ResolvedZone))
 	if err != nil {
 		return err
 	}
@@ -152,12 +178,17 @@ func (c *domeneshopDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) err
 // This is in order to facilitate multiple DNS validations for the same domain
 // concurrently.
 func (c *domeneshopDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
-	client, err := c.getClient(ch)
+	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
 
-	domain, err := client.GetDomainByName(util.UnFqdn(ch.ResolvedZone))
+	client, err := c.getClient(ch, cfg)
+	if err != nil {
+		return err
+	}
+
+	domain, err := resolveDomain(client, cfg.DomainID, util.UnFqdn(ch.ResolvedZone))
 	if err != nil {
 		return err
 	}

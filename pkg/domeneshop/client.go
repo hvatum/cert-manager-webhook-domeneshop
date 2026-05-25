@@ -97,6 +97,17 @@ func (c *Client) Request(method string, endpoint string, reqBody []byte, v inter
 	return nil
 }
 
+// GetDomainByID fetches a single domain by its numeric ID.
+// Useful when the API credentials are not authorised
+// to list the account's domains.
+func (c *Client) GetDomainByID(id int) (*Domain, error) {
+	var domain Domain
+	if err := c.Request("GET", fmt.Sprintf("domains/%d", id), nil, &domain); err != nil {
+		return nil, err
+	}
+	return &domain, nil
+}
+
 // GetDomainByName fetches the domain list and returns the Domain object
 // for the matching domain.
 func (c *Client) GetDomainByName(domain string) (*Domain, error) {
