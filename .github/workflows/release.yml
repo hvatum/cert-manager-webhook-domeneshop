@@ -1,0 +1,58 @@
+# Minimal first-test workflow: build the webhook image on every push to
+# master and publish to ghcr.io under your account.
+#
+# One-time fork setup (do these once, not via this file):
+#   1. Enable Actions on the fork (disabled by default for forks):
+#      https://github.com/hvatum/cert-manager-webhook-domeneshop/settings/actions
+#   2. After the first successful run, flip the package to public so the
+#      cluster can pull without an imagePullSecret:
+#      https://github.com/users/hvatum/packages/container/cert-manager-webhook-domeneshop/settings
+
+name: build & publish
+
+on:
+  push:
+    branches: [master]
+
+# Default GITHUB_TOKEN is read-only on every scope. `packages: write` is
+# what lets the workflow push to ghcr under your user. Without this block
+# the push step fails with a confusing 403.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # build-push-action requires buildx (not the legacy docker build CLI).
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GITHUB_SHA is the full 40-char commit. Trim to 7 chars for tagging,
+      # matching the Makefile convention.
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha_short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # Two tags per build:
+          #   - sha-<short>: immutable, pin to this in Helm for prod.
+          #   - master:      moving pointer at the latest master build.
+          tags: |
+            ghcr.io/hvatum/cert-manager-webhook-domeneshop:sha-${{ steps.vars.outputs.sha_short }}
+            ghcr.io/hvatum/cert-manager-webhook-domeneshop:master
+          build-args: |
+            GIT_COMMIT=${{ steps.vars.outputs.sha_short }}
+            GIT_BRANCH=${{ github.ref_name }}
+            BUILD_DATE=${{ github.event.repository.pushed_at }}
