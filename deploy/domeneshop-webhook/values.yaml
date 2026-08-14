@@ -12,6 +12,15 @@ certManager:
   namespace: cert-manager
   serviceAccountName: cert-manager
 
+rbac:
+  # Grants the webhook read access to Secrets in the certManager.namespace,
+  # which is required when solvers are referenced from a ClusterIssuer.
+  # Disabled by default so the rendered output stays identical to earlier
+  # chart versions, where this Role/RoleBinding had to be uncommented in
+  # templates/rbac.yaml by hand.
+  secretReader:
+    enabled: false
+
 image:
   repository: domeneshop/cert-manager-webhook-domeneshop
   tag: latest
